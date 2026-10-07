@@ -27,7 +27,7 @@
 .\"
 .\"     @(#)pkg.1
 .\"
-.Dd September 12, 2026
+.Dd October 2, 2026
 .Dt PKG.CONF 5
 .Os
 .Sh NAME
@@ -235,6 +235,21 @@ network, either by SSH or any of the protocols supported by
 .Xr fetch 3
 functions.
 Default: 30.
+.It Cm FETCH_WORKERS: integer
+Maximum number of packages to fetch concurrently, from 1 to 16.
+A value of 1 retains sequential fetching.
+Parallel fetching uses separate worker processes and reports progress by
+completed packages, rather than bytes.
+It applies to HTTP and HTTPS binary repositories, including
+.Cm pkg+http
+and
+.Cm pkg+https .
+Mirror mode, other transports, and jobs containing two packages with the
+same name and version use sequential fetching.
+Package installation remains sequential.
+Interrupted downloads may leave partial cache files, which are resumed and
+verified on the next fetch.
+Default: 1.
 .It Cm HANDLE_RC_SCRIPTS: boolean
 When enabled, this option will automatically perform start/stop of
 services during package installation and deinstallation.

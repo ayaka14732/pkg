@@ -75,6 +75,7 @@ static int last_progress_percent = -1;
 static bool progress_started = false;
 static bool progress_interrupted = false;
 static bool progress_debit = false;
+static bool parallel_fetch = false;
 static int64_t last_tick = 0;
 static int64_t stalled;
 static int64_t bytes_per_second;
@@ -458,7 +459,7 @@ event_cb_fetch_begin(struct pkg_event *ev, int *debug __unused)
 
 	if (nbtodl > 0)
 		nbdone++;
-	if (quiet)
+	if (quiet || parallel_fetch)
 		return (0);
 	filename = strrchr(ev->e_fetching.url, '/');
 	if (filename != NULL) {
@@ -484,6 +485,24 @@ event_cb_fetch_begin(struct pkg_event *ev, int *debug __unused)
 		else
 			sb_printf(&msg_buf, "Fetching %s",
 					filename);
+	}
+	return (0);
+}
+
+static int
+event_cb_fetch_multi(struct pkg_event *ev, int *debug __unused)
+{
+	parallel_fetch = ev->type == PKG_EVENT_FETCH_MULTI_BEGIN;
+	progress_debit = false;
+	if (!parallel_fetch) {
+		progressbar_stop();
+		/*
+		 * The workers' fetches skip job_status_begin(), which resets
+		 * the download counter once it is complete; reset it here so
+		 * that the following actions are numbered against nbactions.
+		 */
+		nbtodl = 0;
+		nbdone = 0;
 	}
 	return (0);
 }
@@ -1023,6 +1042,8 @@ static const event_handler_fn event_handlers[PKG_EVENT_LAST] = {
 	[PKG_EVENT_DELETE_FILES_BEGIN]            = event_cb_delete_files_begin,
 	[PKG_EVENT_ADD_DEPS_BEGIN]               = event_cb_add_deps_begin,
 	[PKG_EVENT_ADD_DEPS_FINISHED]            = event_cb_add_deps_finished,
+	[PKG_EVENT_FETCH_MULTI_BEGIN]            = event_cb_fetch_multi,
+	[PKG_EVENT_FETCH_MULTI_FINISHED]         = event_cb_fetch_multi,
 	[PKG_EVENT_FETCH_BEGIN]                  = event_cb_fetch_begin,
 	[PKG_EVENT_FETCH_FINISHED]               = event_cb_fetch_finished,
 	[PKG_EVENT_UPDATE_ADD]                   = event_cb_update_add,
@@ -1070,16 +1091,33 @@ static const event_handler_fn event_handlers[PKG_EVENT_LAST] = {
 _Static_assert(NELEM(event_handlers) == PKG_EVENT_LAST,
     "event_handlers table size does not match pkg_event_t enum");
 
+/* Whether an event leaves the progress bar line intact. */
+static bool
+event_keeps_progress(pkg_event_t type)
+{
+	switch (type) {
+	case PKG_EVENT_PROGRESS_TICK:
+	case PKG_EVENT_FILE_META_OK:
+	case PKG_EVENT_DIR_META_OK:
+		return (true);
+	case PKG_EVENT_PKG_FETCH_BEGIN:
+	case PKG_EVENT_FETCH_BEGIN:
+	case PKG_EVENT_FETCH_FINISHED:
+		/* Per package events, under the batch progress bar. */
+		return (parallel_fetch);
+	default:
+		return (false);
+	}
+}
+
 int
 event_callback(void *data, struct pkg_event *ev)
 {
 	int *debug = data;
 
 	/* Interrupt progressbar for most event types */
-	if (progress_started && ev->type != PKG_EVENT_PROGRESS_TICK &&
-	    ev->type != PKG_EVENT_FILE_META_OK &&
-	    ev->type != PKG_EVENT_DIR_META_OK &&
-	    !progress_interrupted) {
+	if (progress_started && !progress_interrupted &&
+	    !event_keeps_progress(ev->type)) {
 		putchar('\n');
 		progress_interrupted = true;
 	}

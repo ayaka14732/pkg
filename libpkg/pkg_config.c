@@ -91,6 +91,7 @@ struct pkg_ctx ctx = {
 	.compression_format = NULL,
 	.compression_level = -1,
 	.compression_threads = -1,
+	.fetch_workers = 1,
 	.defer_triggers = false,
 	.no_version_for_deps = false,
 };
@@ -175,6 +176,11 @@ static struct config_entry c[] = {
 		PKG_STRING,
 		"VULNXML_SITE",
 		DEFAULT_VULNXML_URL,
+	},
+	{
+		PKG_INT,
+		"FETCH_WORKERS",
+		"1",
 	},
 	{
 		PKG_INT,
@@ -1609,6 +1615,15 @@ pkg_ini(const char *path, const char *reposdir, pkg_init_flags flags)
 	err = config_validate_debug_flags(ucl_object_find_key(config, "PKG_DEBUG_FLAGS"));
 	if (err != EPKG_OK)
 		goto out;
+
+	num = pkg_object_int(pkg_config_get("FETCH_WORKERS"));
+	if (num < 1 || num > FETCH_WORKERS_MAX) {
+		pkg_emit_error("FETCH_WORKERS must be between 1 and %d",
+		    FETCH_WORKERS_MAX);
+		err = EPKG_FATAL;
+		goto out;
+	}
+	ctx.fetch_workers = num;
 
 	ctx.developer_mode = pkg_object_bool(pkg_config_get("DEVELOPER_MODE"));
 	ctx.metalog = pkg_object_string(pkg_config_get("METALOG"));

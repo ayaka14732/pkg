@@ -36,6 +36,10 @@
 
 #include <stdint.h>
 
+/* Event sink of a forked fetch worker; bypasses plugins and EVENT_PIPE. */
+void pkg_event_register_worker(pkg_event_cb cb, void *data);
+int pkg_emit_event(struct pkg_event *ev);
+
 #ifndef PKG_FORMAT_ATTRIBUTE
 #ifdef __GNUC__
 #define PKG_FORMAT_ATTRIBUTE(x, y) __attribute__ ((format (printf, (x), (y))));

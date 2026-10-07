@@ -122,6 +122,8 @@ struct pkg_stringlist_iterator {
 	size_t pos;
 };
 
+#define FETCH_WORKERS_MAX	16
+
 struct pkg_ctx {
 	int eventpipe;
 	int64_t debug_level;
@@ -134,6 +136,7 @@ struct pkg_ctx {
 	const char *compression_format;
 	int compression_level;
 	int compression_threads;
+	unsigned fetch_workers;
 	int rootfd;
 	int cachedirfd;
 	int devnullfd;

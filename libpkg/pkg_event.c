@@ -41,6 +41,8 @@
 
 static pkg_event_cb _cb = NULL;
 static void *_data = NULL;
+static pkg_event_cb worker_cb = NULL;
+static void *worker_data;
 
 static void
 pipe_errno(struct pkg_event *ev, sb_t *msg)
@@ -578,10 +580,20 @@ pkg_event_register(pkg_event_cb cb, void *data)
 	_data = data;
 }
 
-static int
+void
+pkg_event_register_worker(pkg_event_cb cb, void *data)
+{
+	worker_cb = cb;
+	worker_data = data;
+}
+
+int
 pkg_emit_event(struct pkg_event *ev)
 {
 	int ret = 0;
+
+	if (worker_cb != NULL)
+		return (worker_cb(worker_data, ev));
 	pkg_plugins_hook_run(PKG_PLUGIN_HOOK_EVENT, ev, NULL);
 	if (_cb != NULL)
 		ret = _cb(_data, ev);

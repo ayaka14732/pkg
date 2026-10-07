@@ -276,6 +276,9 @@ pkg_jobs_universe_select_candidate(universe_itemv_t *chain,
  */
 int pkg_jobs_schedule(struct pkg_jobs *j);
 
+/* EPKG_END asks the caller to use sequential fetching. */
+int pkg_jobs_fetch_parallel(struct pkg_jobs *j, unsigned nworkers);
+
 /*
  * Free job request (with all candidates)
  */

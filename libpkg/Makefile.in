@@ -23,6 +23,7 @@ SRCS=	backup_lib.c \
 	packing.c \
 	pkg_config.c \
 	pkg_event.c \
+	pkg_fetch_parallel.c \
 	pkg_object.c \
 	pkg_osvf.c \
 	pkg_repo.c \

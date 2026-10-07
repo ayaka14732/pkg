@@ -164,13 +164,57 @@ pkg_repo_http_mirror_append(struct pkg_repo *repo, const char *url,
 	LL_APPEND(repo->http, m);
 }
 
+static void
+libfetch_set_timeout(void)
+{
+	int64_t fetch_timeout;
+
+	fetch_timeout = pkg_object_int(pkg_config_get("FETCH_TIMEOUT"));
+	fetchTimeout = (int)MIN(fetch_timeout, INT_MAX);
+	if (fetch_timeout > 0) {
+		fetchSpeedLimit = 2 * 1024;	/* 2KB/s, same as curl fetcher */
+		fetchSpeedTime = (int)MIN(fetch_timeout, INT_MAX);
+	}
+}
+
+/*
+ * Build the server list of a repository once, from the URL u of one of its
+ * documents: resolve its DNS SRV records (RFC 2782), or fetch its HTTP
+ * mirror list.  The port of u is set for HTTP mirrors, and zone receives
+ * the name looked up, for error messages.
+ */
+static void
+libfetch_servers(struct pkg_repo *repo, struct url *u, char *zone,
+    size_t zonelen)
+{
+	if (strncmp(u->scheme, "http", 4) != 0)
+		return;
+	if (repo->mirror_type == SRV) {
+		snprintf(zone, zonelen, "_%s._tcp.%s", u->scheme, u->host);
+		if (repo->srv == NULL)
+			repo->srv = dns_getsrvinfo(zone);
+	} else if (repo->mirror_type == HTTP) {
+		if (u->port == 0) {
+			if (strcmp(u->scheme, "https") == 0)
+				u->port = 443;
+			else
+				u->port = 80;
+		}
+		snprintf(zone, zonelen,
+		    "%s://%s:%d", u->scheme, u->host, u->port);
+		if (repo->http == NULL)
+			gethttpmirrors(repo, zone, false);
+		if (repo->http == NULL)
+			gethttpmirrors(repo, repo->url, true);
+	}
+}
+
 int
 libfetch_open(struct pkg_repo *repo, struct fetch_item *fi)
 {
 	struct url *u;
 	struct url *repourl;
 	int64_t max_retry, retry;
-	int64_t fetch_timeout;
 	char docpath[MAXPATHLEN];
 	char zone[MAXHOSTNAMELEN + 24];
 	char *doc, *reldoc, *opts;
@@ -183,13 +227,7 @@ libfetch_open(struct pkg_repo *repo, struct fetch_item *fi)
 	max_retry = pkg_object_int(pkg_config_get("FETCH_RETRY"));
 	if (max_retry < 0)
 		max_retry = 0;
-	fetch_timeout = pkg_object_int(pkg_config_get("FETCH_TIMEOUT"));
-
-	fetchTimeout = (int)MIN(fetch_timeout, INT_MAX);
-	if (fetch_timeout > 0) {
-		fetchSpeedLimit = 2 * 1024;	/* 2KB/s, same as curl fetcher */
-		fetchSpeedTime = (int)MIN(fetch_timeout, INT_MAX);
-	}
+	libfetch_set_timeout();
 
 	u = fetchParseURL(fi->url);
 	if (u == NULL) {
@@ -238,13 +276,9 @@ libfetch_open(struct pkg_repo *repo, struct fetch_item *fi)
 	 * the whole budget meant for the list. The list is walked at most
 	 * once: once every server has been tried we give up.
 	 */
+	libfetch_servers(repo, u, zone, sizeof(zone));
 	if (repo->mirror_type == SRV &&
 	    strncmp(u->scheme, "http", 4) == 0) {
-		if (repo->srv == NULL) {
-			snprintf(zone, sizeof(zone),
-			    "_%s._tcp.%s", u->scheme, u->host);
-			repo->srv = dns_getsrvinfo(zone);
-		}
 		if (repo->srv == NULL) {
 			pkg_emit_error("SRV lookup failed for '%s', "
 			    "falling back to %s://%s", zone, u->scheme, u->host);
@@ -256,18 +290,6 @@ libfetch_open(struct pkg_repo *repo, struct fetch_item *fi)
 		}
 	} else if (repo->mirror_type == HTTP &&
 	    strncmp(u->scheme, "http", 4) == 0) {
-		if (u->port == 0) {
-			if (strcmp(u->scheme, "https") == 0)
-				u->port = 443;
-			else
-				u->port = 80;
-		}
-		snprintf(zone, sizeof(zone),
-		    "%s://%s:%d", u->scheme, u->host, u->port);
-		if (repo->http == NULL)
-			gethttpmirrors(repo, zone, false);
-		if (repo->http == NULL)
-			gethttpmirrors(repo, repo->url, true);
 		if (repo->http == NULL) {
 			pkg_emit_error("Could not retrieve mirror list from "
 			    "'%s', falling back to %s://%s", zone,
@@ -438,4 +460,34 @@ libfetch_cleanup(struct pkg_repo *repo)
 	}
 	fh_close(repo);
 	http_cache_flush();
+}
+
+/*
+ * Drop the persistent HTTP connection, so that a process forked afterwards
+ * does not share the socket or TLS session with its parent.
+ */
+void
+libfetch_flush_connections(void)
+{
+	http_cache_flush();
+}
+
+/*
+ * Build the server list of a repository before its fetches; see
+ * pkg_fetch_prepare().
+ */
+void
+libfetch_prepare(struct pkg_repo *repo)
+{
+	char zone[MAXHOSTNAMELEN + 24];
+	const char *url = repo->url;
+	struct url *u;
+
+	if (strncasecmp(url, "pkg+", 4) == 0)
+		url += 4;
+	if ((u = fetchParseURL(url)) == NULL)
+		return;
+	libfetch_set_timeout();
+	libfetch_servers(repo, u, zone, sizeof(zone));
+	fetchFreeURL(u);
 }

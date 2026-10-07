@@ -69,6 +69,7 @@ static struct fetcher fetchers[] = {
 		.open = libfetch_open,
 		.close = fh_close,
 		.cleanup = libfetch_cleanup,
+		.prepare = libfetch_prepare,
 		.fetch = libfetch_fetch,
 	},
 	{
@@ -76,6 +77,7 @@ static struct fetcher fetchers[] = {
 		.open = libfetch_open,
 		.close = fh_close,
 		.cleanup = libfetch_cleanup,
+		.prepare = libfetch_prepare,
 		.fetch = libfetch_fetch,
 	},
 	{
@@ -83,6 +85,7 @@ static struct fetcher fetchers[] = {
 		.open = libfetch_open,
 		.close = fh_close,
 		.cleanup = libfetch_cleanup,
+		.prepare = libfetch_prepare,
 		.fetch = libfetch_fetch,
 	},
 	{
@@ -90,6 +93,7 @@ static struct fetcher fetchers[] = {
 		.open = libfetch_open,
 		.close = fh_close,
 		.cleanup = libfetch_cleanup,
+		.prepare = libfetch_prepare,
 		.fetch = libfetch_fetch,
 	},
 	{
@@ -235,14 +239,67 @@ select_fetcher(const char *url)
 	return (NULL);
 
 }
+
+/* Set the environment of a repository; repo_env_restore() undoes it. */
+static void
+repo_env_apply(struct pkg_repo *repo, kvlist_t *envtorestore,
+    c_charv_t *envtounset)
+{
+	struct pkg_kv	*kv;
+	char		*tmp;
+
+	vec_foreach(repo->env, i) {
+		if ((tmp = getenv(repo->env.d[i]->key)) != NULL) {
+			kv = xcalloc(1, sizeof(*kv));
+			kv->key = xstrdup(repo->env.d[i]->key);
+			kv->value = xstrdup(tmp);
+			vec_push(envtorestore, kv);
+		} else {
+			vec_push(envtounset, repo->env.d[i]->key);
+		}
+		setenv(repo->env.d[i]->key, repo->env.d[i]->value, 1);
+	}
+}
+
+static void
+repo_env_restore(kvlist_t *envtorestore, c_charv_t *envtounset)
+{
+	vec_foreach(*envtorestore, i) {
+		setenv(envtorestore->d[i]->key, envtorestore->d[i]->value, 1);
+		vec_autoremove(envtorestore, i);
+	}
+	vec_free(envtorestore);
+	while (vec_len(envtounset) > 0)
+		unsetenv(vec_pop(envtounset));
+	vec_free(envtounset);
+}
+
+/*
+ * Resolve the servers of a repository (DNS SRV records or HTTP mirror list)
+ * ahead of its fetches, so that the processes forked afterwards to fetch
+ * concurrently inherit them instead of each resolving them again.
+ */
+void
+pkg_fetch_prepare(struct pkg_repo *repo)
+{
+	kvlist_t	 envtorestore = vec_init();
+	c_charv_t	 envtounset = vec_init();
+
+	if (repo->fetcher == NULL)
+		repo->fetcher = select_fetcher(repo->url);
+	if (repo->fetcher == NULL || repo->fetcher->prepare == NULL)
+		return;
+	repo_env_apply(repo, &envtorestore, &envtounset);
+	repo->fetcher->prepare(repo);
+	repo_env_restore(&envtorestore, &envtounset);
+}
+
 int
 pkg_fetch_file_to_fd(struct pkg_repo *repo, int dest, struct fetch_item *fi,
     bool silent)
 {
-	struct pkg_kv	*kv;
 	kvlist_t	 envtorestore = vec_init();
 	c_charv_t		 envtounset = vec_init();
-	char		*tmp;
 	int		 retcode = EPKG_OK;
 	struct pkg_repo	*fakerepo = NULL;
 	size_t           nsz;
@@ -290,17 +347,7 @@ pkg_fetch_file_to_fd(struct pkg_repo *repo, int dest, struct fetch_item *fi,
 	}
 
 	repo->silent = silent;
-	vec_foreach(repo->env, i) {
-		if ((tmp = getenv(repo->env.d[i]->key)) != NULL) {
-			kv = xcalloc(1, sizeof(*kv));
-			kv->key = xstrdup(repo->env.d[i]->key);
-			kv->value = xstrdup(tmp);
-			vec_push(&envtorestore, kv);
-		} else {
-			vec_push(&envtounset, repo->env.d[i]->key);
-		}
-		setenv(repo->env.d[i]->key, repo->env.d[i]->value, 1);
-	}
+	repo_env_apply(repo, &envtorestore, &envtounset);
 
 	if ((retcode = repo->fetcher->open(repo, fi)) != EPKG_OK)
 		goto cleanup;
@@ -321,14 +368,7 @@ pkg_fetch_file_to_fd(struct pkg_repo *repo, int dest, struct fetch_item *fi,
 		pkg_emit_fetch_finished(fi->url);
 
 cleanup:
-	vec_foreach(envtorestore, i) {
-		setenv(envtorestore.d[i]->key, envtorestore.d[i]->value, 1);
-		vec_autoremove(&envtorestore, i);
-	}
-	vec_free(&envtorestore);
-	while (vec_len(&envtounset) > 0)
-		unsetenv(vec_pop(&envtounset));
-	vec_free(&envtounset);
+	repo_env_restore(&envtorestore, &envtounset);
 
 	if (repo->fetcher != NULL && repo->fetcher->close != NULL)
 		repo->fetcher->close(repo);

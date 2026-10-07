@@ -2414,6 +2414,12 @@ pkg_jobs_fetch(struct pkg_jobs *j)
 	if ((j->flags & PKG_FLAG_DRY_RUN) == PKG_FLAG_DRY_RUN)
 		return (EPKG_OK); /* don't download anything */
 
+	if (ctx.fetch_workers > 1 && !mirror) {
+		retcode = pkg_jobs_fetch_parallel(j, ctx.fetch_workers);
+		if (retcode != EPKG_END)
+			return (retcode);
+	}
+
 	/* Fetch */
 	vec_foreach(j->jobs, i) {
 		struct pkg_solved *ps = j->jobs.d[i];
